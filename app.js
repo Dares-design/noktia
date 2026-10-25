@@ -1868,10 +1868,14 @@ function closeSheet() {
 async function loginWithGoogle() {
   await supabaseClient.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin + '/index.html' }
+    options: {
+      redirectTo: window.location.origin + '/index.html',
+      queryParams: {
+        prompt: 'select_account'
+      }
+    }
   });
 }
-
 async function logout() {
   await supabaseClient.auth.signOut();
   window.location.reload();
