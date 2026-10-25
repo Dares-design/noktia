@@ -1868,7 +1868,7 @@ function closeSheet() {
 async function loginWithGoogle() {
   await supabaseClient.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: 'http://noktia.vercel.app/' }' }
+    options: { redirectTo: 'http://noktia.vercel.app/index.html' }' }
   });
 }
 
