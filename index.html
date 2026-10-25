@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1.0">
+<meta name="theme-color" content="#F7F7F5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0F0F0F" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Noktia">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Noktia</title>
+<link rel="stylesheet" href="style.css">
+<style>
+/* Fallback stilovi za kalendar i badge-ove ako nisu u style.css */
+.calendar { width: 100%; }
+.calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.calendar-title { font-weight: 700; font-size: 16px; text-transform: capitalize; }
+.calendar-nav { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-2, #f0f0f0); font-size: 20px; border: none; cursor: pointer; color: inherit; }
+.calendar-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 6px; }
+.calendar-weekday { text-align: center; font-size: 11px; font-weight: 600; color: var(--text-3, #999); padding: 6px 0; text-transform: uppercase; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.calendar-day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: transparent; border: none; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text, #000); position: relative; padding: 0; }
+.calendar-day:hover:not(:disabled) { background: var(--surface-2, #f0f0f0); }
+.calendar-day.other-month { opacity: 0.3; }
+.calendar-day.selected { background: var(--text, #000); color: var(--bg, #fff); font-weight: 700; }
+.calendar-day.today { background: var(--surface-2, #eee); font-weight: 700; }
+.calendar-day.past:not(.today) { opacity: 0.3; }
+.calendar-day:disabled { opacity: 0.3; cursor: not-allowed; }
+.calendar-day.has-appts::after { content: ''; position: absolute; bottom: 5px; width: 4px; height: 4px; border-radius: 50%; background: var(--info, #2563eb); }
+.calendar-day.selected.has-appts::after { background: var(--bg, #fff); }
+.picked-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.picked-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--surface-2, #f0f0f0); border-radius: 20px; font-size: 13px; font-weight: 600; color: inherit; }
+.picked-badge button { background: none; border: none; color: var(--info, #2563eb); font-size: 11px; font-weight: 700; padding: 0; cursor: pointer; text-decoration: underline; }
+.time-chip.busy { opacity: 0.35; cursor: not-allowed; text-decoration: line-through; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="ambient-glow"></div>
+
+  <div id="welcome-overlay" class="welcome-overlay hidden">
+    <div class="welcome-card">
+      <div class="welcome-logo">N</div>
+      <h1 class="welcome-title">Noktia</h1>
+      <p class="welcome-sub">Učitavam…</p>
+    </div>
+  </div>
+
+  <main id="main-content" class="main-content">
+
+    <!-- DANAS -->
+    <section id="screen-today" class="screen active">
+      <header class="screen-header">
+        <button class="icon-btn" id="btn-prev-day" aria-label="Prethodni dan">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="header-center">
+          <h1 id="day-title" class="day-title">Danas</h1>
+          <p id="day-subtitle" class="day-subtitle">—</p>
+        </div>
+        <button class="icon-btn" id="btn-next-day" aria-label="Sledeći dan">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-open-calendar" aria-label="Izaberi datum">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </button>
+      </header>
+      <nav class="week-strip" id="week-strip"></nav>
+      <p id="day-summary" class="day-summary"></p>
+      <div id="appointments-list" class="appointments-list"></div>
+      <button id="btn-back-today" class="back-today hidden">Vrati se na danas</button>
+    </section>
+
+    <!-- KLIJENTKINJE -->
+    <section id="screen-clients" class="screen">
+      <header class="screen-header-simple">
+        <h1 class="day-title">Klijentkinje</h1>
+        <button class="icon-btn" id="btn-add-client" aria-label="Nova klijentkinja">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </header>
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="client-search" class="search-input" placeholder="Pretraži..." autocomplete="off">
+      </div>
+      <div id="clients-list" class="clients-list"></div>
+    </section>
+
+    <!-- PROFIL -->
+    <section id="screen-client-profile" class="screen">
+      <header class="screen-header">
+        <button class="icon-btn" id="btn-back-from-profile" aria-label="Nazad">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="header-center">
+          <h1 id="profile-name" class="day-title">—</h1>
+        </div>
+        <button class="icon-btn" id="btn-edit-client" aria-label="Izmeni">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        </button>
+      </header>
+      <div id="profile-content" class="profile-content"></div>
+    </section>
+
+    <!-- ZARADA -->
+    <section id="screen-revenue" class="screen">
+      <header class="screen-header-simple">
+        <h1 class="day-title">Zarada</h1>
+      </header>
+      <div id="revenue-content"></div>
+    </section>
+
+    <!-- PODEŠAVANJA -->
+    <section id="screen-settings" class="screen">
+      <header class="screen-header-simple">
+        <h1 class="day-title">Podešavanja</h1>
+      </header>
+
+      <div class="settings-list">
+        <button class="settings-row" id="settings-pricelist">
+          <div class="settings-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </div>
+          <div class="settings-text">
+            <div class="settings-title">Cenovnik</div>
+            <div class="settings-sub" id="settings-pricelist-sub">—</div>
+          </div>
+          <svg class="settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
+        <button class="settings-row" id="settings-work-hours">
+          <div class="settings-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div class="settings-text">
+            <div class="settings-title">Radno vreme</div>
+            <div class="settings-sub" id="settings-work-hours-sub">—</div>
+          </div>
+          <svg class="settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
+        <button class="settings-row" id="settings-export-slots">
+          <div class="settings-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </div>
+          <div class="settings-text">
+            <div class="settings-title">Izvezi slobodne termine</div>
+            <div class="settings-sub">Kopiraj tekst za sliku</div>
+          </div>
+          <svg class="settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
+        <button class="settings-row" id="settings-export">
+          <div class="settings-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </div>
+          <div class="settings-text">
+            <div class="settings-title">Sačuvaj kopiju</div>
+            <div class="settings-sub">Preuzmi .json fajl</div>
+          </div>
+          <svg class="settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
+        <button class="settings-row" id="settings-logout">
+          <div class="settings-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </div>
+          <div class="settings-text">
+            <div class="settings-title">Odjavi se</div>
+            <div class="settings-sub">Izađi iz naloga</div>
+          </div>
+          <svg class="settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+
+      <div class="settings-footer">
+        <div class="app-logo">N</div>
+        <div class="app-name">Noktia</div>
+        <div class="app-version">Verzija 1.5</div>
+      </div>
+    </section>
+
+    <!-- CENOVNIK -->
+    <section id="screen-pricelist" class="screen">
+      <header class="screen-header">
+        <button class="icon-btn" id="btn-back-from-pricelist" aria-label="Nazad">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="header-center">
+          <h1 class="day-title">Cenovnik</h1>
+        </div>
+        <button class="icon-btn" id="btn-add-service" aria-label="Dodaj uslugu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </header>
+      <div id="pricelist-content" class="pricelist-content"></div>
+    </section>
+
+  </main>
+
+  <button id="btn-new-appointment" class="btn-new-appointment" aria-label="Novi termin">
+    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    <span class="btn-label">Novi termin</span>
+  </button>
+
+  <nav class="tab-bar">
+    <button class="tab active" data-tab="today">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <span class="tab-label">Danas</span>
+    </button>
+    <button class="tab" data-tab="clients">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span class="tab-label">Klijentkinje</span>
+    </button>
+    <button class="tab" data-tab="revenue">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+      <span class="tab-label">Zarada</span>
+    </button>
+    <button class="tab" data-tab="settings">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span class="tab-label">Podešavanja</span>
+    </button>
+  </nav>
+
+  <div id="sheet-overlay" class="sheet-overlay"></div>
+  <div id="sheet-container" class="sheet-container"></div>
+  <div id="toast-container" class="toast-container"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="app.js?v=20"></script>
+
+</body>
+</html>
