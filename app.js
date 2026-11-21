@@ -1,5 +1,5 @@
 // ============================================================
-// NOKIA V1.5 — KOMPLETAN (V1.0 PARITET)
+// NOKIA V1.6 — SUPABASE + NAPREDNI UI (Sinhronizovano sa lokalnom V1.5)
 // ============================================================
 
 if (!window.supabase) {
@@ -51,6 +51,7 @@ function localDateStr(d) {
 function formatMinutes(m) {
   return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
 }
+function minutesFromDate(d) { return d.getHours() * 60 + d.getMinutes(); }
 
 function getDaySchedule(date) {
   const key = localDateStr(date);
@@ -80,23 +81,6 @@ function lastCompletedForClient(clientId) {
     .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
 }
 
-function calculateSuggestedGap(clientId) {
-  const completed = allAppointments
-    .filter(a => a.clients?.id === clientId && a.status === 'completed')
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 4);
-  if (completed.length < 3) return 21;
-  const gaps = [];
-  for (let i = 0; i < completed.length - 1; i++) {
-    const gap = Math.round((new Date(completed[i].date) - new Date(completed[i+1].date)) / 86400000);
-    if (gap > 0) gaps.push(gap);
-  }
-  if (gaps.length === 0) return 21;
-  const avg = Math.round(gaps.reduce((s, g) => s + g, 0) / gaps.length);
-  const consistent = gaps.every(g => Math.abs(g - avg) <= 4);
-  return consistent ? avg : 21;
-}
-
 // ─── TOAST ─────────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const colors = {
@@ -112,31 +96,6 @@ function toast(msg, type = 'info') {
   el.textContent = msg;
   container.appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 2400);
-}
-
-function toastUndo(msg, undoFn) {
-  const container = document.getElementById("toast-container");
-  if (!container) return;
-  const el = document.createElement("div");
-  el.className = "toast undo-toast";
-  el.style.cssText = "padding:12px 18px;border-radius:12px;margin:8px auto;max-width:88%;background:#18181b;color:#fafafa;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.2);";
-  el.innerHTML = `<span>${msg}</span><button style="background:none;border:none;color:#60a5fa;font-weight:700;cursor:pointer;padding:4px 8px;font-size:13px;">Poništi</button>`;
-  container.appendChild(el);
-  let active = true;
-  el.querySelector("button").onclick = async () => {
-    if (!active) return;
-    active = false;
-    await undoFn();
-    el.style.opacity = '0';
-    setTimeout(() => el.remove(), 300);
-  };
-  setTimeout(() => {
-    if (!active) return;
-    active = false;
-    el.style.opacity = '0';
-    el.style.transition = 'opacity .3s';
-    setTimeout(() => el.remove(), 300);
-  }, 5000);
 }
 
 // ─── INICIJALIZACIJA ───────────────────────────────────────
@@ -201,13 +160,6 @@ async function initApp() {
     setupTabs();
     setupButtons();
     setupSwipe();
-
-    const header = document.querySelector("#screen-today .screen-header");
-    if (header) {
-      header.style.display = "grid";
-      header.style.gridTemplateColumns = "44px 1fr 44px 44px";
-      header.style.alignItems = "center";
-    }
 
   } catch (err) {
     console.error("Greška pri inicijalizaciji:", err);
@@ -449,12 +401,33 @@ function renderTodayV15() {
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
   const summary = document.getElementById("day-summary");
+  const workingSlots = getWorkingSlotsForDay(d);
+  
+  let timeline = [];
+
+  // 1. Pravi termini
+  todaysAppts.forEach(apt => {
+    timeline.push({ type: 'appointment', data: apt, time: minutesFromDate(new Date(apt.date)) });
+  });
+
+  // 2. Slobodni satovi (samo ako nisu zauzeti terminom)
+  if (workingSlots.length > 0) {
+    workingSlots.forEach(m => {
+      const isBooked = todaysAppts.some(a => minutesFromDate(new Date(a.date)) === m);
+      if (!isBooked) {
+        timeline.push({ type: 'free', time: m });
+      }
+    });
+  }
+
+  timeline.sort((a, b) => a.time - b.time);
+
   const scheduledCount = todaysAppts.filter(a => a.status === 'scheduled').length;
   
-  // IZMENA: Prikaz na vrhu ekrana (umesto samo "Nemaš termina")
   if (todaysAppts.length === 0) {
-    const freeCount = getWorkingSlotsForDay(d).length;
-    summary.textContent = freeCount > 0 ? `${freeCount} slobodnih termina` : "Nemaš termina";
+    if (timeline.length > 0) summary.textContent = `${timeline.length} slobodnih termina`;
+    else if (getDaySchedule(d) === 'off') summary.textContent = "Neradni dan";
+    else summary.textContent = "Nemaš termina";
   } else {
     const total = todaysAppts.filter(a => a.status !== 'cancelled')
       .reduce((sum, a) => sum + a.service_lines.reduce((s, x) => s + Number(x.price_snapshot), 0), 0);
@@ -495,41 +468,9 @@ function renderTodayV15() {
     summary.parentNode.insertBefore(schedRow, summary.nextSibling);
   }
 
-  // ─── IZMENA: TERMINI I SLOBODNI SATOVI ─────────────────────
-  const workingSlots = getWorkingSlotsForDay(d);
-  let timeline = [];
-
-  // 1. Popuni timeline radnim satima
-  if (workingSlots.length > 0) {
-    workingSlots.forEach(m => {
-      const appt = todaysAppts.find(a => {
-        const ad = new Date(a.date);
-        return (ad.getHours() * 60 + ad.getMinutes()) === m;
-      });
-
-      if (appt) {
-        timeline.push({ type: 'appointment', data: appt, time: m });
-      } else {
-        timeline.push({ type: 'free', time: m });
-      }
-    });
-  }
-
-  // 2. Dodaj termine koji su van radnog vremena (ako ih ima)
-  todaysAppts.forEach(apt => {
-    const ad = new Date(apt.date);
-    const m = ad.getHours() * 60 + ad.getMinutes();
-    if (!timeline.some(t => t.type === 'appointment' && t.data.id === apt.id)) {
-      timeline.push({ type: 'appointment', data: apt, time: m });
-    }
-  });
-
-  // 3. Sortiraj hronološki
-  timeline.sort((a, b) => a.time - b.time);
-
-  // 4. Iscrtaj
+  // Iscrtavanje
   if (timeline.length === 0) {
-    list.innerHTML = `<div class="empty-state"><p class="empty-title">Nema termina ni radnog vremena</p></div>`;
+    list.innerHTML = `<div class="empty-state"><p class="empty-title">${getDaySchedule(d) === 'off' ? "Ne radiš ovaj dan" : "Slobodan dan"}</p></div>`;
   } else {
     timeline.forEach(item => {
       if (item.type === 'appointment') {
@@ -559,28 +500,75 @@ function renderTodayV15() {
         list.appendChild(card);
 
       } else if (item.type === 'free') {
-        // NOVI DEO: Kartica za slobodan termin
+        // NAPREDNI UI ZA SLOBODAN TERMIN
         const card = document.createElement("div");
-        card.className = "appointment-card free-slot-card";
-        card.style.border = "1px dashed var(--border, #e5e5e5)";
-        card.style.background = "transparent";
-        card.style.boxShadow = "none";
-
+        card.className = "appointment-card";
+        card.style.opacity = "0.82";
         card.innerHTML = `
           <div class="appointment-row-1">
-            <span class="appointment-time" style="color: var(--text-2);">${formatMinutes(item.time)}</span>
+            <span class="appointment-time">${formatMinutes(item.time)}</span>
           </div>
-          <div class="appointment-name" style="color: var(--text-2); font-weight: 500;">Slobodan termin</div>
-          <div class="appointment-services" style="color: var(--info, #2563eb); font-weight: 600;">Slobodno za zakazivanje</div>
+          <div class="appointment-name">— Slobodan termin —</div>
+          <div class="appointment-services">Slobodno za zakazivanje</div>
         `;
-        
-        card.onclick = () => openNewApptFromFreeSlot(d, item.time);
+        card.onclick = () => openScheduledFreeSlotSheet(d, item.time);
         list.appendChild(card);
       }
     });
   }
 
   document.getElementById("btn-back-today").classList.toggle("hidden", isToday(d));
+}
+
+// ─── PROZOR ZA SLOBODAN TERMIN ─────────────────────────────
+function openScheduledFreeSlotSheet(day, minutes) {
+  const d = new Date(day);
+  d.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+  const dayLabel = `${capitalize(DAYS_LONG[d.getDay()])}, ${d.getDate()}. ${MONTHS_SHORT[d.getMonth()]}`;
+
+  const html = `<div class="sheet-grabber"></div>
+    <div class="sheet-header">
+      <div class="sheet-title">Slobodan termin</div>
+      <button class="sheet-close" onclick="closeSheet()">×</button>
+    </div>
+    <div class="sheet-body">
+      <div class="detail-hero">
+        <div class="detail-time">${formatTime(d)}</div>
+        <div class="detail-date">${dayLabel}</div>
+      </div>
+      <p style="text-align:center; color:var(--text-2); font-size:15px; line-height:1.5; margin-bottom:24px;">
+        Ovaj sat je označen kao slobodan.<br>Želiš li da zakažeš klijentkinju?
+      </p>
+      <button class="btn btn-primary" onclick="quickBookFromFreeSlot(new Date(${d.getTime()}), ${minutes})">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Zakaži klijentkinju
+      </button>
+      <button class="btn btn-secondary" style="margin-top:12px;" onclick="removeScheduledFreeSlot(new Date(${d.getTime()}), ${minutes})">
+        Ukloni ovaj sat
+      </button>
+      <button class="btn btn-secondary" style="margin-top:12px; background:transparent; color:var(--text-2);" onclick="closeSheet()">
+        Zatvori
+      </button>
+    </div>`;
+  openSheet(html);
+}
+
+async function removeScheduledFreeSlot(day, minutes) {
+  const prevSchedule = getDaySchedule(day);
+  if (!Array.isArray(prevSchedule)) { closeSheet(); return; }
+  const updated = prevSchedule.filter(m => m !== minutes);
+  await saveDaySchedule(day, updated.length > 0 ? updated : null);
+  closeSheet();
+  toast("Sat uklonjen", 'success');
+  renderTodayV15();
+}
+
+function quickBookFromFreeSlot(day, minutes) {
+  openNewAppointmentSheetV15();
+  newApptState.date = startOfDay(day);
+  newApptState.time = minutes;
+  newApptState.step = 'client';
+  renderNewAppointmentSheetV15();
 }
 
 // ─── DATE PICKER ───────────────────────────────────────────
@@ -1163,10 +1151,7 @@ async function cancelAppointmentV15(aptId) {
     const { error } = await supabaseClient.from('appointments').update({ status: 'cancelled' }).eq('id', aptId);
     if (error) throw error;
     closeSheet();
-    toastUndo("Termin otkazan", async () => {
-      await supabaseClient.from('appointments').update({ status: 'scheduled' }).eq('id', aptId);
-      await loadData();
-    });
+    toast("Termin otkazan", 'success');
     await loadData();
   } catch (err) { toast("Greška: " + err.message, 'error'); }
 }
@@ -1212,7 +1197,7 @@ function openNextAppointmentPromptV15(aptId) {
   const apt = allAppointments.find(a => a.id === aptId);
   if (!apt || !apt.clients) { loadData(); return; }
 
-  const daysToAdd = calculateSuggestedGap(apt.clients.id);
+  const daysToAdd = 21;
   const currentDate = new Date(apt.date);
   const suggestedDate = addDays(currentDate, daysToAdd);
   const lastTime = currentDate.getHours() * 60 + currentDate.getMinutes();
@@ -1220,13 +1205,12 @@ function openNextAppointmentPromptV15(aptId) {
 
   const dayStr = `${capitalize(DAYS_LONG[suggestedDate.getDay()])}, ${suggestedDate.getDate()}. ${MONTHS[suggestedDate.getMonth()]}`;
   const timeStr = formatTime(suggestedDate);
-  const gapLabel = daysToAdd <= 7 ? `${daysToAdd} dana` : daysToAdd <= 30 ? `${Math.round(daysToAdd/7)} nedelje` : `${Math.round(daysToAdd/30)} meseca`;
 
   const html = `<div class="sheet-grabber"></div>
     <div class="sheet-body" style="padding-top:12px;">
       <div class="success-hero">
         <div class="success-title" style="font-size:24px;">Sledeći termin?</div>
-        <div class="success-sub">${apt.clients.first_name} obično dolazi na ${gapLabel}.</div>
+        <div class="success-sub">${apt.clients.first_name} obično dolazi na 3 nedelje.</div>
       </div>
       <div class="next-card" style="margin-bottom:20px;">
         <div class="next-card-time">${timeStr}</div>
@@ -1333,7 +1317,7 @@ function copySlotsTextV15() {
 
 function exportBackupV15() {
   const backup = {
-    exported_at: new Date().toISOString(), app_version: '1.5',
+    exported_at: new Date().toISOString(), app_version: '1.6',
     profile: currentProfile, clients: allClients, services: allServices,
     appointments: allAppointments, settings: currentSettings, day_schedules: allDaySchedules,
   };
@@ -1462,19 +1446,9 @@ function openNewAppointmentSheetV15(preselectClientId = null) {
     displayedMonth: new Date(baseDate.getFullYear(), baseDate.getMonth(), 1),
     pickedHours: [],
     fromProfile: !!preselectClientId,
+    returnToTodayAfterSchedule: false
   };
   newApptClientSearch = "";
-  renderNewAppointmentSheetV15();
-}
-
-// DODATO: Funkcija za brzo zakazivanje klikom na slobodan termin
-function openNewApptFromFreeSlot(date, timeMinutes) {
-  openNewAppointmentSheetV15(); 
-  
-  newApptState.date = date;
-  newApptState.time = timeMinutes;
-  newApptState.step = 'client';
-  
   renderNewAppointmentSheetV15();
 }
 
@@ -1483,7 +1457,7 @@ function openEditAppointment(aptId) {
   if (!apt) return;
   if (apt.status !== 'scheduled') { toast("Ne može da se menja završen ili otkazan termin", 'error'); return; }
   const d = new Date(apt.date);
-  const minutes = d.getHours() * 60 + d.getMinutes();
+  const minutes = minutesFromDate(d);
   newApptState = {
     mode: 'edit', editingId: aptId,
     clientId: apt.clients?.id,
@@ -1493,6 +1467,7 @@ function openEditAppointment(aptId) {
     displayedMonth: new Date(d.getFullYear(), d.getMonth(), 1),
     pickedHours: [],
     fromProfile: false,
+    returnToTodayAfterSchedule: false
   };
   newApptClientSearch = "";
   closeSheet();
@@ -1506,16 +1481,16 @@ function renderNewAppointmentSheetV15() {
   const isEdit = s.mode === 'edit';
 
   let html = `<div class="sheet-grabber"></div>
-    <div class="sheet-header"><div class="sheet-title">${isEdit ? "Izmeni termin" : "Novi termin"}</div>
+    <div class="sheet-header"><div class="sheet-title">${s.step === 'pick-hours' ? 'Podešavanje sati' : isEdit ? "Izmeni termin" : "Novi termin"}</div>
       <button class="sheet-close" onclick="closeSheet()">×</button>
     </div>
     <div class="sheet-body">`;
 
   // Badges
   const badges = [];
-  if (s.date) badges.push({ text: `${capitalize(DAYS_LONG[s.date.getDay()])}, ${s.date.getDate()}. ${MONTHS_SHORT[s.date.getMonth()]}`, action: 'newAppt_changeDate' });
-  if (s.time !== null) badges.push({ text: formatMinutes(s.time), action: 'newAppt_changeTime' });
-  if (s.clientId) {
+  if (s.date && s.step !== 'pick-hours') badges.push({ text: `${capitalize(DAYS_LONG[s.date.getDay()])}, ${s.date.getDate()}. ${MONTHS_SHORT[s.date.getMonth()]}`, action: 'newAppt_changeDate' });
+  if (s.time !== null && s.step !== 'pick-hours') badges.push({ text: formatMinutes(s.time), action: 'newAppt_changeTime' });
+  if (s.clientId && s.step !== 'pick-hours') {
     const c = allClients.find(x => x.id === s.clientId);
     if (c) badges.push({ text: c.first_name, action: 'newAppt_changeClient' });
   }
@@ -1558,13 +1533,22 @@ function calendarPickDay(ts) {
   const s = newApptState;
   const day = startOfDay(new Date(ts));
   s.date = day;
-  s.time = null;
-  s.services = [];
+  s.returnToTodayAfterSchedule = false;
+  
+  if (s.mode !== 'edit') {
+    s.time = null;
+    s.services = [];
+  }
 
   const schedule = getDaySchedule(day);
-  if (schedule === null) s.step = 'ask-schedule';
-  else if (schedule === 'off') s.step = 'day-off';
-  else s.step = 'time';
+  
+  if (schedule === 'off') {
+    s.step = 'day-off';
+  } else if (schedule === null) {
+    s.step = 'ask-schedule';
+  } else {
+    s.step = 'time';
+  }
   renderNewAppointmentSheetV15();
 }
 
@@ -1689,13 +1673,13 @@ function renderTimeGridStep() {
   if (schedule === 'off') {
     return `<div style="padding:24px 12px;text-align:center;color:var(--text-2);font-size:14px;">
       Ne radiš ovaj dan.
-      <div style="margin-top:10px;"><button style="font-size:13px;font-weight:700;color:var(--info, #2563eb);" onclick="openDayScheduleSheet(new Date('${localDateStr(s.date)}T12:00:00'))">Podesi sate</button></div>
+      <div style="margin-top:10px;"><button style="font-size:13px;font-weight:700;color:var(--info, #2563eb);" onclick="editDayScheduleFromCurrent()">Podesi sate</button></div>
     </div>`;
   }
 
   const workingHours = getWorkingSlotsForDay(s.date);
   const dayAppts = allAppointments.filter(a => a.status === 'scheduled' && sameDay(new Date(a.date), s.date) && a.id !== s.editingId);
-  const bookedMinutes = dayAppts.map(a => { const dt = new Date(a.date); return dt.getHours() * 60 + dt.getMinutes(); });
+  const bookedMinutes = dayAppts.map(a => minutesFromDate(new Date(a.date)));
 
   let html = '';
 
@@ -1818,8 +1802,7 @@ function newApptToggleService(id) {
 function newAppt_changeDate() {
   const s = newApptState;
   s.step = 'calendar';
-  s.time = null;
-  s.services = [];
+  if (s.mode !== 'edit') { s.time = null; s.services = []; }
   renderNewAppointmentSheetV15();
 }
 
@@ -1847,7 +1830,7 @@ function saveNewAppointment() {
     if (a.status !== 'scheduled') return false;
     if (s.mode === 'edit' && a.id === s.editingId) return false;
     const d = new Date(a.date);
-    return sameDay(d, s.date) && (d.getHours() * 60 + d.getMinutes()) === s.time;
+    return sameDay(d, s.date) && minutesFromDate(d) === s.time;
   });
 
   if (conflict) {
@@ -1897,6 +1880,13 @@ async function commitAppointment() {
       closeSheet();
       toast("Izmena sačuvana", 'success');
     } else {
+      // Ako je zakazano na slobodan sat, moramo ga ukloniti iz daySchedules (ako je bio array)
+      const daySched = allDaySchedules[localDateStr(s.date)];
+      if (Array.isArray(daySched) && daySched.includes(s.time)) {
+        const remaining = daySched.filter(m => m !== s.time);
+        await saveDaySchedule(s.date, remaining.length > 0 ? remaining : null);
+      }
+
       const { data: apptData, error: apptError } = await supabaseClient.from('appointments').insert([{
         user_id: currentUser.id, client_id: s.clientId, date: isoDate, status: 'scheduled', payment_status: 'unpaid'
       }]).select();
