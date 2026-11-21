@@ -450,8 +450,11 @@ function renderTodayV15() {
 
   const summary = document.getElementById("day-summary");
   const scheduledCount = todaysAppts.filter(a => a.status === 'scheduled').length;
+  
+  // IZMENA: Prikaz na vrhu ekrana (umesto samo "Nemaš termina")
   if (todaysAppts.length === 0) {
-    summary.textContent = "Nemaš termina";
+    const freeCount = getWorkingSlotsForDay(d).length;
+    summary.textContent = freeCount > 0 ? `${freeCount} slobodnih termina` : "Nemaš termina";
   } else {
     const total = todaysAppts.filter(a => a.status !== 'cancelled')
       .reduce((sum, a) => sum + a.service_lines.reduce((s, x) => s + Number(x.price_snapshot), 0), 0);
@@ -492,34 +495,88 @@ function renderTodayV15() {
     summary.parentNode.insertBefore(schedRow, summary.nextSibling);
   }
 
-  // Termini
-  if (todaysAppts.length === 0) {
-    list.innerHTML = `<div class="empty-state"><p class="empty-title">Slobodan dan</p></div>`;
+  // ─── IZMENA: TERMINI I SLOBODNI SATOVI ─────────────────────
+  const workingSlots = getWorkingSlotsForDay(d);
+  let timeline = [];
+
+  // 1. Popuni timeline radnim satima
+  if (workingSlots.length > 0) {
+    workingSlots.forEach(m => {
+      const appt = todaysAppts.find(a => {
+        const ad = new Date(a.date);
+        return (ad.getHours() * 60 + ad.getMinutes()) === m;
+      });
+
+      if (appt) {
+        timeline.push({ type: 'appointment', data: appt, time: m });
+      } else {
+        timeline.push({ type: 'free', time: m });
+      }
+    });
+  }
+
+  // 2. Dodaj termine koji su van radnog vremena (ako ih ima)
+  todaysAppts.forEach(apt => {
+    const ad = new Date(apt.date);
+    const m = ad.getHours() * 60 + ad.getMinutes();
+    if (!timeline.some(t => t.type === 'appointment' && t.data.id === apt.id)) {
+      timeline.push({ type: 'appointment', data: apt, time: m });
+    }
+  });
+
+  // 3. Sortiraj hronološki
+  timeline.sort((a, b) => a.time - b.time);
+
+  // 4. Iscrtaj
+  if (timeline.length === 0) {
+    list.innerHTML = `<div class="empty-state"><p class="empty-title">Nema termina ni radnog vremena</p></div>`;
   } else {
-    todaysAppts.forEach(apt => {
-      const client = apt.clients;
-      const total = apt.service_lines.reduce((sum, s) => sum + Number(s.price_snapshot), 0);
-      const servicesText = apt.service_lines.map(s => s.name_snapshot).join(", ");
+    timeline.forEach(item => {
+      if (item.type === 'appointment') {
+        const apt = item.data;
+        const client = apt.clients;
+        const total = apt.service_lines.reduce((sum, s) => sum + Number(s.price_snapshot), 0);
+        const servicesText = apt.service_lines.map(s => s.name_snapshot).join(", ");
 
-      const card = document.createElement("div");
-      card.className = "appointment-card";
-      if (apt.status === 'completed') card.classList.add("completed");
-      if (apt.status === 'cancelled') card.classList.add("cancelled");
+        const card = document.createElement("div");
+        card.className = "appointment-card";
+        if (apt.status === 'completed') card.classList.add("completed");
+        if (apt.status === 'cancelled') card.classList.add("cancelled");
 
-      const isAwaitingPayment = apt.status === 'completed' && apt.payment_status === 'unpaid';
-      const badge = isAwaitingPayment ? `<div class="appointment-badge">Čeka naplatu</div>` : '';
-      const timeClass = apt.status === 'completed' ? "appointment-time completed-time" : "appointment-time";
+        const isAwaitingPayment = apt.status === 'completed' && apt.payment_status === 'unpaid';
+        const badge = isAwaitingPayment ? `<div class="appointment-badge">Čeka naplatu</div>` : '';
+        const timeClass = apt.status === 'completed' ? "appointment-time completed-time" : "appointment-time";
 
-      card.innerHTML = `
-        <div class="appointment-row-1">
-          <span class="${timeClass}">${formatTime(apt.date)}</span>
-          <span class="appointment-price">${formatMoney(total)}</span>
-        </div>
-        <div class="appointment-name">${client ? `${client.first_name} ${client.last_name || ""}`.trim() : "Nepoznat"}</div>
-        <div class="appointment-services">${servicesText}</div>
-        ${badge}`;
-      card.onclick = () => openAppointmentDetailV15(apt.id);
-      list.appendChild(card);
+        card.innerHTML = `
+          <div class="appointment-row-1">
+            <span class="${timeClass}">${formatTime(apt.date)}</span>
+            <span class="appointment-price">${formatMoney(total)}</span>
+          </div>
+          <div class="appointment-name">${client ? `${client.first_name} ${client.last_name || ""}`.trim() : "Nepoznat"}</div>
+          <div class="appointment-services">${servicesText}</div>
+          ${badge}`;
+        card.onclick = () => openAppointmentDetailV15(apt.id);
+        list.appendChild(card);
+
+      } else if (item.type === 'free') {
+        // NOVI DEO: Kartica za slobodan termin
+        const card = document.createElement("div");
+        card.className = "appointment-card free-slot-card";
+        card.style.border = "1px dashed var(--border, #e5e5e5)";
+        card.style.background = "transparent";
+        card.style.boxShadow = "none";
+
+        card.innerHTML = `
+          <div class="appointment-row-1">
+            <span class="appointment-time" style="color: var(--text-2);">${formatMinutes(item.time)}</span>
+          </div>
+          <div class="appointment-name" style="color: var(--text-2); font-weight: 500;">Slobodan termin</div>
+          <div class="appointment-services" style="color: var(--info, #2563eb); font-weight: 600;">Slobodno za zakazivanje</div>
+        `;
+        
+        card.onclick = () => openNewApptFromFreeSlot(d, item.time);
+        list.appendChild(card);
+      }
     });
   }
 
@@ -1407,6 +1464,17 @@ function openNewAppointmentSheetV15(preselectClientId = null) {
     fromProfile: !!preselectClientId,
   };
   newApptClientSearch = "";
+  renderNewAppointmentSheetV15();
+}
+
+// DODATO: Funkcija za brzo zakazivanje klikom na slobodan termin
+function openNewApptFromFreeSlot(date, timeMinutes) {
+  openNewAppointmentSheetV15(); 
+  
+  newApptState.date = date;
+  newApptState.time = timeMinutes;
+  newApptState.step = 'client';
+  
   renderNewAppointmentSheetV15();
 }
 
