@@ -687,14 +687,9 @@ function openPickHoursSheet(key) {
   const existing = allDaySchedules[key];
   pickedHoursState.key = key;
   if (Array.isArray(existing)) {
-    pickedHoursState.hours = [...existing];
-  } else if (existing === 'off') {
-    pickedHoursState.hours = [];
+    pickedHoursState.hours = [...existing]; // Ako je već ranije čekirala neke sate, pokaži ih
   } else {
-    pickedHoursState.hours = [];
-    for (let m = currentSettings.work_start * 60; m < currentSettings.work_end * 60; m += 30) {
-      pickedHoursState.hours.push(m);
-    }
+    pickedHoursState.hours = []; // Ako nije, ostavi prazno
   }
   renderPickHoursSheet();
 }
@@ -1575,8 +1570,7 @@ async function schedulePickAll() {
 
 function schedulePickSome() {
   const s = newApptState;
-  s.pickedHours = [];
-  for (let m = currentSettings.work_start * 60; m < currentSettings.work_end * 60; m += 30) s.pickedHours.push(m);
+  s.pickedHours = []; // Ostavljamo prazno, ništa nije označeno
   s.step = 'pick-hours';
   renderNewAppointmentSheetV15();
 }
